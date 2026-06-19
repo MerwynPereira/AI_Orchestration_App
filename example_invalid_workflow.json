@@ -1,0 +1,14 @@
+{
+  "name": "invalid-demo",
+  "steps": [
+    {
+      "adapter": "NoSuchAdapter",
+      "prompt": "this adapter is not registered"
+    },
+    {
+      "adapter": "EchoAdapter",
+      "prompt": "this step has an invalid timeout",
+      "timeout": -5
+    }
+  ]
+}

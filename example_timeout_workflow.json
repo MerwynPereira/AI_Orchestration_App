@@ -1,0 +1,18 @@
+{
+  "_comment": "Demonstrates the optional per-step 'timeout' field (seconds, a positive number). It overrides the adapter's default timeout and is most useful for CLI adapters like ClaudeCodeAdapter. Unknown keys such as this '_comment' are ignored by the loader. This workflow needs Claude Code installed to actually run.",
+  "name": "timeout-demo",
+  "steps": [
+    {
+      "_comment": "Give this step up to 60s instead of the 120s default.",
+      "adapter": "ClaudeCodeAdapter",
+      "prompt": "Reply with exactly the word PONG and nothing else.",
+      "timeout": 60
+    },
+    {
+      "_comment": "A tighter 30s budget for a quick follow-up; {input} is the previous step's output.",
+      "adapter": "ClaudeCodeAdapter",
+      "prompt": "Echo this back verbatim: {input}",
+      "timeout": 30
+    }
+  ]
+}
