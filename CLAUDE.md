@@ -128,6 +128,11 @@ The workflow JSON refers to the adapter by that registered name.
   - `id` — optional unique identifier for this step's output, letting later
     steps reference it as `{steps.<id>}`. Allowed characters: letters, digits,
     `_`, `-`.
+  - `retries` — optional non-negative integer (default `0`). On `AdapterError`
+    the runner retries the step up to this many extra times with a small fixed
+    backoff (`RETRY_BACKOFF_SECONDS`); if it still fails, the usual
+    `step N (Adapter) failed` behaviour applies. The backoff `sleep` is
+    injected into `run_workflow`, so tests never actually wait.
 - Unknown keys (e.g. `_comment`) are ignored, so JSON files can carry notes.
 
 ### Prompt placeholders

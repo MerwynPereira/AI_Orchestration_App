@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
+from typing import Callable
 
 from .adapters import Adapter, AdapterError, CliAdapter
 from .registry import ADAPTERS, create_adapter
@@ -22,6 +24,10 @@ from .workflow import Step, Workflow, WorkflowError
 logger = logging.getLogger(__name__)
 
 INPUT_PLACEHOLDER = "{input}"
+
+#: Seconds to wait between retry attempts (a small fixed backoff). Kept simple
+#: and constant; the ``sleep`` callable is injectable so tests never wait.
+RETRY_BACKOFF_SECONDS = 1.0
 
 #: Single-pass matcher for both placeholder kinds: ``{input}`` (group 0, no
 #: capture) and ``{steps.<id>}`` (group 1 is the id). Matching both in one
@@ -83,8 +89,9 @@ def _run_step(
     previous_output: str,
     outputs: dict[str, str],
     registry: dict[str, type[Adapter]],
+    sleep: Callable[[float], None] = time.sleep,
 ) -> StepResult:
-    """Resolve and execute a single step.
+    """Resolve and execute a single step, retrying on ``AdapterError``.
 
     Args:
         step: The step to run.
@@ -92,12 +99,14 @@ def _run_step(
         previous_output: Output of the prior step.
         outputs: Map of step id -> output, for ``{steps.<id>}`` references.
         registry: Adapter name -> adapter class.
+        sleep: Backoff sleep, injected so tests never actually wait.
 
     Returns:
         The :class:`StepResult`.
 
     Raises:
-        WorkflowError: If the adapter is unknown or the adapter fails.
+        WorkflowError: If the adapter is unknown, or the adapter still fails
+            after exhausting ``step.retries``.
     """
     try:
         adapter = create_adapter(step.adapter, registry)
@@ -111,18 +120,63 @@ def _run_step(
     logger.info("Step %d: %s", index, step.adapter)
     logger.debug("  prompt: %s", prompt)
 
-    try:
-        output = adapter.send(prompt)
-    except AdapterError as exc:
-        raise WorkflowError(f"step {index} ({step.adapter}) failed: {exc}") from exc
-
+    output = _send_with_retries(adapter, prompt, step, index, sleep)
     logger.info("  output: %s", output)
     return StepResult(index=index, adapter=step.adapter, output=output)
+
+
+def _send_with_retries(
+    adapter: Adapter,
+    prompt: str,
+    step: Step,
+    index: int,
+    sleep: Callable[[float], None],
+) -> str:
+    """Call ``adapter.send`` up to ``step.retries`` extra times on failure.
+
+    Args:
+        adapter: The instantiated adapter.
+        prompt: The resolved prompt to send.
+        step: The step (for its ``retries`` and adapter name).
+        index: 1-based step position, for messages.
+        sleep: Backoff sleep, injected so tests never actually wait.
+
+    Returns:
+        The adapter's response.
+
+    Raises:
+        WorkflowError: If every attempt raises ``AdapterError``; the message
+            names the failing step exactly as the single-attempt case does.
+    """
+    attempts = step.retries + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return adapter.send(prompt)
+        except AdapterError as exc:
+            if attempt < attempts:
+                logger.warning(
+                    "  step %d (%s) attempt %d/%d failed: %s; retrying in %ss",
+                    index,
+                    step.adapter,
+                    attempt,
+                    attempts,
+                    exc,
+                    RETRY_BACKOFF_SECONDS,
+                )
+                sleep(RETRY_BACKOFF_SECONDS)
+                continue
+            raise WorkflowError(
+                f"step {index} ({step.adapter}) failed: {exc}"
+            ) from exc
+    # Unreachable: the loop either returns or raises on the final attempt.
+    raise AssertionError("retry loop exited without returning or raising")
 
 
 def run_workflow(
     workflow: Workflow,
     registry: dict[str, type[Adapter]] | None = None,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> list[StepResult]:
     """Execute every step in order, chaining outputs into inputs.
 
@@ -130,12 +184,14 @@ def run_workflow(
         workflow: The workflow to run.
         registry: Adapter name -> adapter class. Defaults to the built-in
             :data:`conductor.registry.ADAPTERS`.
+        sleep: Backoff sleep used between retries, injected so tests never wait.
 
     Returns:
         One :class:`StepResult` per step, in order.
 
     Raises:
-        WorkflowError: On the first step that fails; later steps do not run.
+        WorkflowError: On the first step that fails (after exhausting its
+            retries); later steps do not run.
     """
     active_registry = registry if registry is not None else ADAPTERS
     results: list[StepResult] = []
@@ -144,7 +200,9 @@ def run_workflow(
 
     logger.info("Running workflow: %s", workflow.name)
     for index, step in enumerate(workflow.steps, start=1):
-        result = _run_step(step, index, previous_output, outputs, active_registry)
+        result = _run_step(
+            step, index, previous_output, outputs, active_registry, sleep
+        )
         previous_output = result.output
         if step.id is not None:
             outputs[step.id] = result.output

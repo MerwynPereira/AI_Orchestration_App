@@ -44,12 +44,16 @@ class Step:
         id: Optional identifier for this step's output, so later steps can refer
             to it as ``{steps.<id>}``. Must be unique within the workflow and may
             contain only letters, digits, ``_`` and ``-``.
+        retries: How many times to retry the step (with a small fixed backoff)
+            if the adapter raises ``AdapterError``. Non-negative; ``0`` means a
+            single attempt with no retry.
     """
 
     adapter: str
     prompt: str
     timeout: float | None = None
     id: str | None = None
+    retries: int = 0
 
 
 @dataclass(frozen=True)
@@ -139,6 +143,10 @@ def _validate_step(
     if timeout is not None and not _is_positive_number(timeout):
         problems.append(f"{prefix}: 'timeout' must be a positive number")
 
+    retries = item.get("retries")
+    if retries is not None and not _is_non_negative_int(retries):
+        problems.append(f"{prefix}: 'retries' must be a non-negative integer")
+
     step_id = item.get("id")
     if step_id is not None:
         if not isinstance(step_id, str) or not step_id:
@@ -207,6 +215,11 @@ def _is_positive_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
 
 
+def _is_non_negative_int(value: object) -> bool:
+    """Return True if ``value`` is an int >= 0 (but not a bool)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def load_workflow(
     path: Path | str,
     known_adapters: Container[str] | None = None,
@@ -260,4 +273,5 @@ def _build_step(item: dict) -> Step:
         prompt=item["prompt"],
         timeout=float(timeout) if timeout is not None else None,
         id=item.get("id"),
+        retries=int(item.get("retries", 0)),
     )

@@ -292,3 +292,49 @@ def test_validate_non_reference_braces_are_ignored():
         known_adapters=KNOWN,
     )
     assert problems == []
+
+
+# --- retries ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "2", True, [1]])
+def test_validate_bad_retries(bad):
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [{"adapter": "EchoAdapter", "prompt": "x", "retries": bad}],
+        }
+    )
+    assert "step 1: 'retries' must be a non-negative integer" in problems
+
+
+@pytest.mark.parametrize("good", [0, 1, 5])
+def test_validate_good_retries_accepted(good):
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [{"adapter": "EchoAdapter", "prompt": "x", "retries": good}],
+        },
+        known_adapters=KNOWN,
+    )
+    assert problems == []
+
+
+def test_load_parses_retries(tmp_path):
+    path = _write(
+        tmp_path,
+        {
+            "name": "d",
+            "steps": [{"adapter": "EchoAdapter", "prompt": "x", "retries": 3}],
+        },
+    )
+    step = load_workflow(path, known_adapters=KNOWN).steps[0]
+    assert step.retries == 3
+
+
+def test_load_defaults_retries_to_zero(tmp_path):
+    path = _write(
+        tmp_path,
+        {"name": "d", "steps": [{"adapter": "EchoAdapter", "prompt": "x"}]},
+    )
+    assert load_workflow(path, known_adapters=KNOWN).steps[0].retries == 0
