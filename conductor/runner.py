@@ -1,16 +1,22 @@
 """Workflow runner.
 
 Executes a workflow's steps in order, feeding each step's output into the next
-step's prompt via the ``{input}`` placeholder. Prints each step's output and
-stops with a clear error if a step fails.
+step's prompt via the ``{input}`` placeholder. Step progress is reported through
+the stdlib :mod:`logging` module (module-level ``logger``); execution stops with
+a clear :class:`~conductor.workflow.WorkflowError` if a step fails, naming the
+step that failed.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
-from .adapters import Adapter, AdapterError, ClaudeCodeAdapter, EchoAdapter
+from .adapters import Adapter, AdapterError, CliAdapter
+from .registry import ADAPTERS, create_adapter
 from .workflow import Step, Workflow, WorkflowError
+
+logger = logging.getLogger(__name__)
 
 INPUT_PLACEHOLDER = "{input}"
 
@@ -30,14 +36,6 @@ class StepResult:
     output: str
 
 
-def build_default_registry() -> dict[str, Adapter]:
-    """Return the built-in adapter registry keyed by class name."""
-    return {
-        "EchoAdapter": EchoAdapter(),
-        "ClaudeCodeAdapter": ClaudeCodeAdapter(),
-    }
-
-
 def _resolve_prompt(step: Step, previous_output: str) -> str:
     """Substitute the previous output into the step's prompt template.
 
@@ -55,15 +53,15 @@ def _run_step(
     step: Step,
     index: int,
     previous_output: str,
-    registry: dict[str, Adapter],
+    registry: dict[str, type[Adapter]],
 ) -> StepResult:
     """Resolve and execute a single step.
 
     Args:
         step: The step to run.
-        index: 1-based step position, for error messages.
+        index: 1-based step position, for messages.
         previous_output: Output of the prior step.
-        registry: Adapter name -> instance.
+        registry: Adapter name -> adapter class.
 
     Returns:
         The :class:`StepResult`.
@@ -71,32 +69,37 @@ def _run_step(
     Raises:
         WorkflowError: If the adapter is unknown or the adapter fails.
     """
-    adapter = registry.get(step.adapter)
-    if adapter is None:
-        raise WorkflowError(f"step {index}: unknown adapter {step.adapter!r}")
+    try:
+        adapter = create_adapter(step.adapter, registry)
+    except AdapterError as exc:
+        raise WorkflowError(f"step {index}: {exc}") from exc
+
+    if step.timeout is not None and isinstance(adapter, CliAdapter):
+        adapter.timeout = step.timeout
 
     prompt = _resolve_prompt(step, previous_output)
-    print(f"--- Step {index}: {step.adapter} ---")
-    print(f"  prompt: {prompt}")
+    logger.info("Step %d: %s", index, step.adapter)
+    logger.debug("  prompt: %s", prompt)
 
     try:
         output = adapter.send(prompt)
     except AdapterError as exc:
         raise WorkflowError(f"step {index} ({step.adapter}) failed: {exc}") from exc
 
-    print(f"  output: {output}\n")
+    logger.info("  output: %s", output)
     return StepResult(index=index, adapter=step.adapter, output=output)
 
 
 def run_workflow(
     workflow: Workflow,
-    registry: dict[str, Adapter] | None = None,
+    registry: dict[str, type[Adapter]] | None = None,
 ) -> list[StepResult]:
     """Execute every step in order, chaining outputs into inputs.
 
     Args:
         workflow: The workflow to run.
-        registry: Adapter name -> instance. Defaults to the built-in registry.
+        registry: Adapter name -> adapter class. Defaults to the built-in
+            :data:`conductor.registry.ADAPTERS`.
 
     Returns:
         One :class:`StepResult` per step, in order.
@@ -104,13 +107,15 @@ def run_workflow(
     Raises:
         WorkflowError: On the first step that fails; later steps do not run.
     """
-    active_registry = registry if registry is not None else build_default_registry()
+    active_registry = registry if registry is not None else ADAPTERS
     results: list[StepResult] = []
     previous_output = ""
 
+    logger.info("Running workflow: %s", workflow.name)
     for index, step in enumerate(workflow.steps, start=1):
         result = _run_step(step, index, previous_output, active_registry)
         previous_output = result.output
         results.append(result)
 
+    logger.info("Workflow complete (%d steps).", len(results))
     return results
