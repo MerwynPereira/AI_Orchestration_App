@@ -36,6 +36,12 @@ from typing import Callable
 # Claude Code is installed but not on PATH, so call it by absolute path.
 DEFAULT_CLAUDE_PATH = r"C:\Users\merwy\.local\bin\claude.exe"
 
+# Codex (OpenAI's CLI agent) installs as an npm global package
+# (`npm install -g @openai/codex`), which drops a `.cmd` shim in the npm global
+# prefix. subprocess runs that shim directly (shell=False), as with the editor
+# CLIs above. Path verified against `npm prefix -g` on this machine.
+DEFAULT_CODEX_PATH = r"C:\Users\merwy\AppData\Roaming\npm\codex.cmd"
+
 # VS Code and Antigravity ship `.cmd` launchers in their `bin` directories.
 # subprocess runs these directly (shell=False) on this machine.
 DEFAULT_VSCODE_PATH = (
@@ -291,6 +297,32 @@ class ClaudeCodeAdapter(CliAdapter):
     def _build_args(self, prompt: str) -> list[str]:
         """Run Claude Code in headless print mode."""
         return ["-p", prompt]
+
+
+class CodexAdapter(CliAdapter):
+    """Runs ``codex exec "<prompt>"`` via subprocess and returns its stdout.
+
+    Chat-style contract: ``prompt`` is a natural-language prompt; the return
+    value is Codex's final reply. ``codex exec`` is Codex's non-interactive mode:
+    it streams progress to stderr and prints only the final message to stdout —
+    the clean-stdout shape :class:`CliAdapter` already expects.
+
+    This is a read-only one-shot: ``--full-auto`` and ``--json`` are deliberately
+    NOT passed, so the run returns plain text rather than applying repo edits or
+    emitting an event stream. ``--skip-git-repo-check`` lets it run from any
+    working directory without failing the default in-repo guard.
+
+    Authentication is out of scope: the adapter never handles credentials. It
+    relies on an existing ``codex login`` session (or an ``OPENAI_API_KEY``
+    environment variable) being set up beforehand.
+    """
+
+    tool_name = "codex"
+    default_executable = DEFAULT_CODEX_PATH
+
+    def _build_args(self, prompt: str) -> list[str]:
+        """Run Codex non-interactively as a read-only one-shot."""
+        return ["exec", "--skip-git-repo-check", prompt]
 
 
 class VSCodeAdapter(CliAdapter):

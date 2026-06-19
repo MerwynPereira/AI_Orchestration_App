@@ -26,6 +26,7 @@ def test_adapter_names_lists_all_builtins():
     for expected in (
         "AntigravityEditorAdapter",
         "ClaudeCodeAdapter",
+        "CodexAdapter",
         "EchoAdapter",
         "VSCodeAdapter",
     ):

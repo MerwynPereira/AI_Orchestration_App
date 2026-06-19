@@ -11,6 +11,7 @@ from conductor.adapters import (
     AdapterError,
     AntigravityEditorAdapter,
     ClaudeCodeAdapter,
+    CodexAdapter,
     EchoAdapter,
     VSCodeAdapter,
     _clean,
@@ -125,6 +126,52 @@ def test_claude_missing_executable_raises_adaptererror(monkeypatch):
         ClaudeCodeAdapter().send("x")
 
 
+# --- CodexAdapter (mocked) ------------------------------------------------
+
+
+def test_codex_success_returns_clean_stdout(monkeypatch):
+    fake = _FakeRun(result=_completed(0, stdout="PONG\n"))
+    monkeypatch.setattr(RUN_TARGET, fake)
+
+    assert CodexAdapter().send("ping") == "PONG"
+    assert fake.last_cmd[1:] == ["exec", "--skip-git-repo-check", "ping"]
+    assert fake.last_kwargs["timeout"] == 120.0
+    assert fake.last_kwargs["stdin"] == subprocess.DEVNULL
+
+
+def test_codex_cleans_ansi_and_whitespace(monkeypatch):
+    fake = _FakeRun(result=_completed(0, stdout="\x1b[32m  PONG \x1b[0m\n"))
+    monkeypatch.setattr(RUN_TARGET, fake)
+    assert CodexAdapter().send("x") == "PONG"
+
+
+def test_codex_nonzero_exit_raises_adaptererror(monkeypatch):
+    fake = _FakeRun(result=_completed(2, stderr="\x1b[31mboom\x1b[0m\n"))
+    monkeypatch.setattr(RUN_TARGET, fake)
+
+    with pytest.raises(AdapterError) as exc_info:
+        CodexAdapter().send("x")
+
+    message = str(exc_info.value)
+    assert "codex exited with code 2" in message
+    assert "boom" in message
+    assert "\x1b" not in message  # stderr was cleaned
+
+
+def test_codex_timeout_raises_adaptererror(monkeypatch):
+    fake = _FakeRun(exc=subprocess.TimeoutExpired(cmd="codex", timeout=120.0))
+    monkeypatch.setattr(RUN_TARGET, fake)
+    with pytest.raises(AdapterError, match="timed out"):
+        CodexAdapter().send("x")
+
+
+def test_codex_missing_executable_raises_adaptererror(monkeypatch):
+    fake = _FakeRun(exc=FileNotFoundError())
+    monkeypatch.setattr(RUN_TARGET, fake)
+    with pytest.raises(AdapterError, match="not found"):
+        CodexAdapter().send("x")
+
+
 # --- editor adapters (mocked) ---------------------------------------------
 
 
@@ -171,6 +218,8 @@ def test_antigravity_builds_args_and_confirms(monkeypatch):
 
 def test_default_executables_and_timeout():
     assert ClaudeCodeAdapter().executable_path.endswith("claude.exe")
+    assert CodexAdapter().executable_path.endswith("codex.cmd")
     assert VSCodeAdapter().executable_path.endswith("code.cmd")
     assert AntigravityEditorAdapter().executable_path.endswith("antigravity-ide.cmd")
     assert ClaudeCodeAdapter().timeout == 120.0
+    assert CodexAdapter().timeout == 120.0
