@@ -9,6 +9,8 @@ from unittest import mock
 import pytest
 
 from conductor import __main__ as cli
+from conductor.runner import StepResult
+from conductor.workflow import Step, Workflow
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -121,6 +123,73 @@ def test_main_non_verbose_hides_prompt(tmp_path, capsys):
     # Without --verbose the resolved-prompt (DEBUG) line is suppressed. The
     # echoed text still shows up in the "output:" line, so check the label.
     assert "prompt: secret-xyz" not in capsys.readouterr().out
+
+
+# --- run log (--output) ----------------------------------------------------
+
+
+def test_main_output_writes_run_log(tmp_path, capsys):
+    wf = _write(
+        tmp_path,
+        {
+            "name": "logged",
+            "steps": [
+                {"id": "a", "adapter": "EchoAdapter", "prompt": "first"},
+                {"adapter": "EchoAdapter", "prompt": "got: {steps.a}"},
+            ],
+        },
+    )
+    out_path = tmp_path / "results.json"
+    assert cli.main([str(wf), "--output", str(out_path)]) == 0
+    assert f"Wrote run log to {out_path}" in capsys.readouterr().out
+
+    log = json.loads(out_path.read_text(encoding="utf-8"))
+    assert log["workflow"] == "logged"
+    assert log["result"] == "ok"
+    assert [s["index"] for s in log["steps"]] == [1, 2]
+    assert log["steps"][0]["id"] == "a"
+    assert log["steps"][1]["id"] is None
+    assert log["steps"][1]["output"] == "got: first"
+    assert all(s["status"] == "ok" for s in log["steps"])
+    assert all(isinstance(s["duration_seconds"], (int, float)) for s in log["steps"])
+    assert all(s["duration_seconds"] >= 0 for s in log["steps"])
+
+
+def test_main_output_failure_returns_one(tmp_path, capsys):
+    wf = _write(
+        tmp_path,
+        {"name": "d", "steps": [{"adapter": "EchoAdapter", "prompt": "hi"}]},
+    )
+    # Parent directory does not exist -> write raises OSError.
+    bad = tmp_path / "missing_dir" / "out.json"
+    assert cli.main([str(wf), "--output", str(bad)]) == 1
+    assert "Failed to write run log" in capsys.readouterr().err
+
+
+def test_build_run_log_marks_overall_error_when_a_step_failed():
+    workflow = Workflow(
+        name="mixed",
+        steps=[
+            Step(adapter="EchoAdapter", prompt="ok", id="a"),
+            Step(adapter="BoomAdapter", prompt="x", continue_on_error=True),
+        ],
+    )
+    results = [
+        StepResult(index=1, adapter="EchoAdapter", output="ok", duration=0.01),
+        StepResult(
+            index=2,
+            adapter="BoomAdapter",
+            output="",
+            status="error",
+            error="step 2 (BoomAdapter) failed: kaboom",
+            duration=0.02,
+        ),
+    ]
+    log = cli._build_run_log(workflow, results)
+    assert log["result"] == "error"
+    assert log["steps"][0]["id"] == "a"
+    assert log["steps"][1]["status"] == "error"
+    assert "kaboom" in log["steps"][1]["error"]
 
 
 # --- bundled example workflows --------------------------------------------

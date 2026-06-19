@@ -209,6 +209,13 @@ def test_successful_step_has_ok_status():
     assert result.error is None
 
 
+def test_step_result_records_duration():
+    workflow = Workflow(name="w", steps=[Step(adapter="EchoAdapter", prompt="hi")])
+    [result] = run_workflow(workflow, registry=_echo_registry())
+    assert isinstance(result.duration, float)
+    assert result.duration >= 0.0
+
+
 def test_continue_on_error_records_failure_and_keeps_going():
     workflow = Workflow(
         name="resilient",

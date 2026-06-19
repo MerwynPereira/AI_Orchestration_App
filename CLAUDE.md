@@ -181,6 +181,12 @@ logs to stdout as plain lines and exposes `--verbose` (`-v`) for `DEBUG`. Tests
 assert on output via pytest's `caplog`. CLI-level messages (load errors, the
 dry-run plan) use `print()` to stderr/stdout intentionally.
 
+For a machine-readable record (as opposed to the human log), pass `--output
+PATH`: after a run the CLI writes a plain JSON run log (workflow name, overall
+`result`, and per-step index/id/adapter/status/output/error/`duration_seconds`).
+It is a file, not a database; the builder (`_build_run_log`) is a pure function
+so it is unit-tested directly.
+
 ## Coding conventions
 
 - `from __future__ import annotations` at the top of every module.
@@ -195,8 +201,10 @@ dry-run plan) use `print()` to stderr/stdout intentionally.
 ```bash
 # Run a workflow
 python -m conductor example_workflow.json
+python -m conductor example_named_outputs_workflow.json       # {steps.<id>} fan-in
 python -m conductor --dry-run example_timeout_workflow.json   # validate + plan only
 python -m conductor --verbose example_workflow.json           # show resolved prompts
+python -m conductor --output results.json example_workflow.json  # write a JSON run log
 
 # Tests (pytest is the only dev dependency)
 pip install -r requirements-dev.txt

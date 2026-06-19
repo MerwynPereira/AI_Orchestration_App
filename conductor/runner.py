@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 from .adapters import Adapter, AdapterError, CliAdapter
@@ -53,6 +53,7 @@ class StepResult:
             that failed but had ``continue_on_error`` set.
         error: The failure message when ``status`` is :data:`STATUS_ERROR`,
             otherwise ``None``.
+        duration: Wall-clock seconds the step took (including any retries).
     """
 
     index: int
@@ -60,6 +61,7 @@ class StepResult:
     output: str
     status: str = STATUS_OK
     error: str | None = None
+    duration: float = 0.0
 
 
 def _resolve_prompt(
@@ -211,6 +213,7 @@ def run_workflow(
 
     logger.info("Running workflow: %s", workflow.name)
     for index, step in enumerate(workflow.steps, start=1):
+        start = time.monotonic()
         try:
             result = _run_step(
                 step, index, previous_output, outputs, active_registry, sleep
@@ -225,7 +228,10 @@ def run_workflow(
                 output="",
                 status=STATUS_ERROR,
                 error=str(exc),
+                duration=time.monotonic() - start,
             )
+        else:
+            result = replace(result, duration=time.monotonic() - start)
         previous_output = result.output
         if step.id is not None:
             outputs[step.id] = result.output
