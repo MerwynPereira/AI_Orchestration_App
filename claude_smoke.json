@@ -1,0 +1,9 @@
+{
+  "name": "claude-smoke-test",
+  "steps": [
+    {
+      "adapter": "ClaudeCodeAdapter",
+      "prompt": "Reply with exactly the word PONG and nothing else."
+    }
+  ]
+}
