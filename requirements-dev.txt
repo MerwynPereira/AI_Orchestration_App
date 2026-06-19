@@ -1,0 +1,5 @@
+# Development-only dependencies (not needed to run the engine, which is
+# stdlib-only). Install with: pip install -r requirements-dev.txt
+#
+# pytest is the project's first real dependency — used for the test suite.
+pytest>=8
