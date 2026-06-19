@@ -1,2 +1,7 @@
-# Conductor v1 engine skeleton is stdlib-only — no third-party packages yet.
-# UI (flet/pywebview) and GUI-automation (pywinauto/pyperclip) deps come later.
+# The core engine (adapters, registry, workflow, runner, CLI) is stdlib-only.
+# These packages are needed ONLY by the GUI-chat adapters (GuiChatAdapter and
+# its subclasses, e.g. ClaudeDesktopAdapter). They are imported lazily, so the
+# engine and the test suite still run without them installed — but a real
+# GUI-chat run needs them:
+pywinauto>=0.6   # focus a desktop window and send keystrokes (Windows, UIA)
+pyperclip>=1.8   # put the prompt on the clipboard to paste it in

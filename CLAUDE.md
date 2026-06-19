@@ -5,12 +5,17 @@ Guidance for working in this repository. It documents the conventions the
 
 ## Purpose
 
-Conductor is a small, stdlib-only engine for chaining AI/CLI tools. A
-**workflow** is an ordered list of **steps**; each step names an **adapter** (a
-uniform wrapper around a tool) and a **prompt**. The **runner** executes steps
-in order, piping each step's output into the next step's prompt via an
-`{input}` placeholder. The engine is headless and command-line driven — there
-is no UI and no GUI-automation here, by design.
+Conductor is a small engine for chaining AI/CLI tools. A **workflow** is an
+ordered list of **steps**; each step names an **adapter** (a uniform wrapper
+around a tool) and a **prompt**. The **runner** executes steps in order, piping
+each step's output into the next step's prompt via an `{input}` placeholder. The
+engine is headless and command-line driven — there is no UI here.
+
+The **core engine** (adapters base, registry, workflow, runner, CLI) is
+stdlib-only. The engine is no longer *strictly* stdlib-only overall: the
+GUI-chat adapters need `pywinauto` + `pyperclip` (see `requirements.txt`), but
+they are imported lazily so the engine and the test suite still run without them
+installed.
 
 ## Architecture
 
@@ -45,7 +50,7 @@ def send(self, prompt: str) -> str: ...
 - `prompt` arrives fully resolved (the runner has already substituted
   `{input}`).
 
-Two flavours of adapter exist, and "prompt" means different things:
+Three flavours of adapter exist, and "prompt" means different things:
 
 - **Chat-style** (e.g. `ClaudeCodeAdapter`): `prompt` is natural language; the
   return value is the model's reply.
@@ -53,6 +58,9 @@ Two flavours of adapter exist, and "prompt" means different things:
   is a string of **CLI arguments** for the editor (e.g. `--diff a.txt b.txt`),
   NOT a chat prompt and NOT an AI feature. These never invoke a tool's AI agent
   and must not pass `--wait` (it blocks until the window closes).
+- **GUI-chat** (e.g. `ClaudeDesktopAdapter`): `prompt` is natural language
+  driven into a desktop chat *window* via focus + clipboard; the reply is read
+  back by polling until the text settles. See `GuiChatAdapter` below.
 
 CLI adapters subclass `CliAdapter` and only provide:
 
@@ -68,6 +76,24 @@ CLI adapters subclass `CliAdapter` and only provide:
 returns stdout passed through `_clean()` (ANSI-stripped, whitespace-trimmed).
 The `timeout` attribute is public and mutable so the runner can apply a per-step
 override.
+
+GUI-chat adapters subclass `GuiChatAdapter` and only provide three physical
+actions, each of which must raise `AdapterError` (never a raw pywinauto/OS
+error):
+
+- `_focus_window()` — bring the target window to the foreground.
+- `_submit_prompt(prompt)` — paste the prompt into the message box and submit.
+- `_read_response() -> str` — return the current reply text (`""` until it
+  begins); called repeatedly while polling.
+
+`GuiChatAdapter.send()` guards an empty prompt, runs focus → submit (wrapping any
+non-`AdapterError` in `AdapterError`), then calls the pure module-level
+`_poll_until_stable()` helper. That helper is the **response-complete
+heuristic**: a streaming reply keeps growing, so once `_read_response()` returns
+the same non-empty text for `stable_for` seconds it is judged finished;
+`overall_timeout` is the hard wall. `_now`/`_sleep` are injectable so tests drive
+a deterministic fake clock. Optional GUI deps are imported lazily via
+`_import_module()`, which converts a missing package into `AdapterError`.
 
 ## How to add an adapter
 
@@ -143,5 +169,7 @@ python -m pytest
 ```
 
 On this machine use the project venv: `.\venv\Scripts\python.exe -m pytest`.
-The engine itself needs no third-party packages (`requirements.txt` is empty);
-dev tooling lives in `requirements-dev.txt`.
+The core engine needs no third-party packages; the GUI-chat adapters need the
+runtime deps in `requirements.txt` (`pywinauto`, `pyperclip`) but only to drive a
+real window — the test suite mocks the automation layer and runs without them.
+Dev tooling (pytest) lives in `requirements-dev.txt`.

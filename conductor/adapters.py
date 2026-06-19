@@ -4,7 +4,7 @@ An adapter is a uniform wrapper around "something that takes a prompt and
 returns text" — an echo for testing, a chat CLI, or an editor CLI. Every
 adapter implements :meth:`Adapter.send`.
 
-Two kinds of adapter live here:
+Three kinds of adapter live here:
 
 * Chat-style adapters (e.g. :class:`ClaudeCodeAdapter`) where ``prompt`` is a
   natural-language prompt and the return value is the model's reply.
@@ -12,18 +12,26 @@ Two kinds of adapter live here:
   :class:`AntigravityEditorAdapter`) where ``prompt`` is a string of
   command-line arguments for the editor's CLI (NOT a chat prompt). See those
   classes for the exact contract.
+* GUI-chat adapters (e.g. :class:`ClaudeDesktopAdapter`) where ``prompt`` is a
+  natural-language prompt driven into a desktop chat window via window focus +
+  clipboard, and the response is read back by polling until the text settles.
 
 All CLI-backed adapters share :class:`CliAdapter`, which centralises the
 subprocess hardening: absolute executable path, timeout, ``stdin`` redirected
-away, and ``AdapterError`` on any failure.
+away, and ``AdapterError`` on any failure. GUI-chat adapters share
+:class:`GuiChatAdapter`, which centralises the focus → submit → poll loop and
+its hard overall timeout.
 """
 
 from __future__ import annotations
 
+import importlib
 import re
 import shlex
 import subprocess
+import time
 from abc import ABC, abstractmethod
+from typing import Callable
 
 # Claude Code is installed but not on PATH, so call it by absolute path.
 DEFAULT_CLAUDE_PATH = r"C:\Users\merwy\.local\bin\claude.exe"
@@ -39,6 +47,16 @@ DEFAULT_ANTIGRAVITY_PATH = (
 
 # Seconds to wait for a CLI before giving up on a hung process.
 DEFAULT_TIMEOUT = 120.0
+
+# GUI-chat tuning. The hard wall is DEFAULT_GUI_TIMEOUT; a response is judged
+# complete once its text stops changing for DEFAULT_STABLE_FOR seconds, sampled
+# every DEFAULT_POLL_INTERVAL seconds.
+DEFAULT_GUI_TIMEOUT = 120.0
+DEFAULT_STABLE_FOR = 2.0
+DEFAULT_POLL_INTERVAL = 0.5
+
+# Claude Desktop is an Electron app; its top-level window title starts "Claude".
+DEFAULT_CLAUDE_DESKTOP_TITLE_RE = r"^Claude"
 
 # Matches ANSI/VT100 escape sequences (CSI ... final byte). The CLIs return
 # clean text today, but this is cheap insurance against TTY-dependent coloring.
@@ -70,6 +88,85 @@ def _split_args(arg_string: str) -> list[str]:
             token = token[1:-1]
         cleaned.append(token)
     return cleaned
+
+
+def _import_module(name: str, tool_name: str):
+    """Import an optional dependency, raising ``AdapterError`` if it is missing.
+
+    GUI-chat adapters depend on third-party packages (pywinauto, pyperclip) that
+    the core engine does not. Importing them lazily keeps the package importable
+    everywhere; this helper turns a missing dependency into the adapter contract's
+    ``AdapterError`` instead of a bare ``ImportError``.
+
+    Args:
+        name: The module to import (e.g. ``"pywinauto"``).
+        tool_name: Adapter tool name, used in the error message.
+
+    Returns:
+        The imported module.
+
+    Raises:
+        AdapterError: If the module cannot be imported.
+    """
+    try:
+        return importlib.import_module(name)
+    except ImportError as exc:
+        raise AdapterError(
+            f"{tool_name} needs the {name!r} package; install requirements.txt"
+        ) from exc
+
+
+def _poll_until_stable(
+    read: Callable[[], str],
+    *,
+    overall_timeout: float,
+    stable_for: float,
+    poll_interval: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+    tool_name: str = "GUI chat",
+) -> str:
+    """Poll ``read`` until its text stops changing, then return that text.
+
+    This is the response-complete heuristic: a streaming reply keeps growing, so
+    once ``read()`` returns the same non-empty text for ``stable_for`` seconds it
+    is treated as finished. ``now``/``sleep`` are injected so tests can drive a
+    fake clock deterministically.
+
+    Args:
+        read: Callable returning the current response text (``""`` until the
+            reply starts).
+        overall_timeout: Hard wall, in seconds, across the whole poll.
+        stable_for: Seconds the text must stay unchanged to count as complete.
+        poll_interval: Seconds to wait between samples.
+        now: Monotonic time source (returns seconds).
+        sleep: Sleep function (takes seconds).
+        tool_name: Adapter tool name, used in the timeout message.
+
+    Returns:
+        The stabilised, non-empty response text.
+
+    Raises:
+        AdapterError: If no stable, non-empty response appears before
+            ``overall_timeout`` elapses.
+    """
+    deadline = now() + overall_timeout
+    last_text: str | None = None
+    stable_since: float | None = None
+    while True:
+        current = read()
+        timestamp = now()
+        if current != last_text:
+            # Still changing (or first sample): reset the stability clock.
+            last_text = current
+            stable_since = timestamp
+        elif current and stable_since is not None and timestamp - stable_since >= stable_for:
+            return current
+        if timestamp >= deadline:
+            raise AdapterError(
+                f"{tool_name} did not finish responding within {overall_timeout}s"
+            )
+        sleep(poll_interval)
 
 
 class AdapterError(Exception):
@@ -241,3 +338,174 @@ class AntigravityEditorAdapter(CliAdapter):
         if output:
             return output
         return f"{self.tool_name}: ran {' '.join(args[1:])}".rstrip()
+
+
+class GuiChatAdapter(Adapter):
+    """Base for chat-only desktop tools driven via window focus + clipboard.
+
+    Chat-style contract: ``prompt`` is a natural-language prompt; the return
+    value is the assistant's reply. Unlike :class:`CliAdapter`, there is no
+    process to capture — the adapter focuses a desktop window, pastes the prompt,
+    submits it, then reads the reply back by polling until the text settles (see
+    :func:`_poll_until_stable`).
+
+    Subclasses provide the three physical actions, each of which must raise
+    ``AdapterError`` (never a raw pywinauto/OS error) on failure:
+
+    * :meth:`_focus_window` — bring the target window to the foreground.
+    * :meth:`_submit_prompt` — put ``prompt`` into the message box and send it.
+    * :meth:`_read_response` — return the current response text (``""`` until it
+      starts), called repeatedly while polling.
+
+    Those actions are the seam the tests mock, mirroring how :class:`CliAdapter`
+    tests mock ``subprocess.run`` — no test drives a real window.
+
+    The timing attributes (``overall_timeout``, ``stable_for``,
+    ``poll_interval``) are public and mutable so a caller can tune them; ``_now``
+    and ``_sleep`` are injectable so tests can run a fake clock.
+    """
+
+    #: Short tool name used in error messages (e.g. ``"Claude Desktop"``).
+    tool_name: str = "gui-chat"
+
+    def __init__(
+        self,
+        *,
+        overall_timeout: float = DEFAULT_GUI_TIMEOUT,
+        stable_for: float = DEFAULT_STABLE_FOR,
+        poll_interval: float = DEFAULT_POLL_INTERVAL,
+    ) -> None:
+        """Store the polling configuration.
+
+        Args:
+            overall_timeout: Hard wall, in seconds, for the response wait.
+            stable_for: Seconds the reply text must stay unchanged to be judged
+                complete.
+            poll_interval: Seconds between response samples.
+        """
+        self.overall_timeout = overall_timeout
+        self.stable_for = stable_for
+        self.poll_interval = poll_interval
+        # Injectable so tests can drive a deterministic fake clock.
+        self._now: Callable[[], float] = time.monotonic
+        self._sleep: Callable[[float], None] = time.sleep
+
+    def _focus_window(self) -> None:
+        """Bring the target window to the foreground (subclass responsibility)."""
+        raise NotImplementedError
+
+    def _submit_prompt(self, prompt: str) -> None:
+        """Type/paste ``prompt`` into the window and submit it."""
+        raise NotImplementedError
+
+    def _read_response(self) -> str:
+        """Return the current response text (``""`` until the reply begins)."""
+        raise NotImplementedError
+
+    def send(self, prompt: str) -> str:
+        """Drive ``prompt`` through the desktop window and return the reply.
+
+        Raises:
+            AdapterError: If the prompt is empty, the window cannot be focused or
+                submitted to, or no stable response arrives within
+                :attr:`overall_timeout`.
+        """
+        if not prompt.strip():
+            raise AdapterError(f"{self.tool_name}: prompt is empty")
+        try:
+            self._focus_window()
+            self._submit_prompt(prompt)
+        except AdapterError:
+            raise
+        except Exception as exc:  # never let a raw pywinauto/OS error escape
+            raise AdapterError(f"{self.tool_name}: automation failed: {exc}") from exc
+        return self._await_response()
+
+    def _await_response(self) -> str:
+        """Poll :meth:`_read_response` until the reply settles or times out."""
+        try:
+            return _poll_until_stable(
+                self._read_response,
+                overall_timeout=self.overall_timeout,
+                stable_for=self.stable_for,
+                poll_interval=self.poll_interval,
+                now=self._now,
+                sleep=self._sleep,
+                tool_name=self.tool_name,
+            )
+        except AdapterError:
+            raise
+        except Exception as exc:  # a raw error from _read_response
+            raise AdapterError(
+                f"{self.tool_name}: failed to read response: {exc}"
+            ) from exc
+
+
+class ClaudeDesktopAdapter(GuiChatAdapter):
+    """Drives the Claude Desktop window via pywinauto (UIA) + pyperclip.
+
+    SPIKE: this proves the focus → paste → poll loop is structured correctly.
+    The detection logic and every error path are covered by tests with the
+    automation layer mocked; the real run against a live Claude Desktop window
+    has NOT been validated here and is the open question this spike exists to
+    answer.
+
+    Known fragile point (the spike's whole reason to exist): reading *only* the
+    latest assistant reply out of the conversation is app-specific and the most
+    likely thing to need iteration. :meth:`_read_response` is a deliberately
+    thin, best-effort implementation; harden it once the loop proves viable.
+
+    Requires the user to already be signed in. It never automates credentials,
+    never bypasses any rate/usage limit, and is paced by :attr:`poll_interval`.
+    """
+
+    tool_name = "Claude Desktop"
+    #: Regex matched against the top-level window title.
+    window_title_re: str = DEFAULT_CLAUDE_DESKTOP_TITLE_RE
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        # Gap between paste and Enter so the UI registers the pasted text.
+        self.submit_delay = 0.3
+        self._window = None
+
+    def _focus_window(self) -> None:
+        pywinauto = _import_module("pywinauto", self.tool_name)
+        from pywinauto.findwindows import ElementNotFoundError
+
+        try:
+            window = pywinauto.Desktop(backend="uia").window(
+                title_re=self.window_title_re
+            )
+            window.set_focus()
+            self._window = window
+        except ElementNotFoundError as exc:
+            raise AdapterError(
+                f"{self.tool_name} window not found "
+                f"(title matching {self.window_title_re!r}); is it running?"
+            ) from exc
+
+    def _submit_prompt(self, prompt: str) -> None:
+        pyperclip = _import_module("pyperclip", self.tool_name)
+        from pywinauto.keyboard import send_keys
+
+        pyperclip.copy(prompt)
+        send_keys("^v")  # paste into the focused message box
+        self._sleep(self.submit_delay)
+        send_keys("{ENTER}")  # submit
+
+    def _read_response(self) -> str:
+        """Best-effort read of the latest reply text from the window tree.
+
+        Reads the conversation's text directly from the UIA tree rather than the
+        clipboard, so sampling has no side effects and a stale clipboard cannot
+        masquerade as a finished reply. Returns ``""`` while the reply has not
+        appeared yet. Pinning this to *only* the last assistant turn is the part
+        most likely to need hardening after the spike.
+        """
+        if self._window is None:
+            return ""
+        texts = self._window.descendants(control_type="Text")
+        if not texts:
+            return ""
+        return _clean(texts[-1].window_text() or "")

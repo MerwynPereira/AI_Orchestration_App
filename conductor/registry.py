@@ -15,6 +15,7 @@ from .adapters import (
     AdapterError,
     AntigravityEditorAdapter,
     ClaudeCodeAdapter,
+    ClaudeDesktopAdapter,
     EchoAdapter,
     VSCodeAdapter,
 )
@@ -25,6 +26,7 @@ ADAPTERS: dict[str, type[Adapter]] = {
     "ClaudeCodeAdapter": ClaudeCodeAdapter,
     "VSCodeAdapter": VSCodeAdapter,
     "AntigravityEditorAdapter": AntigravityEditorAdapter,
+    "ClaudeDesktopAdapter": ClaudeDesktopAdapter,
 }
 
 
