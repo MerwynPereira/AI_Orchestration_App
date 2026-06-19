@@ -1,0 +1,8 @@
+# UI-only dependency (NOT needed to run the headless engine or its test suite,
+# both of which stay stdlib-only). Install with:
+#     pip install -r requirements-ui.txt
+#
+# Flet powers the desktop UI in conductor/ui/ (run it with: python -m conductor.ui).
+# Flet's Python API changes between releases, so pin to the 0.85.x line that the
+# UI in conductor/ui/app.py was written and verified against.
+flet>=0.85,<0.86

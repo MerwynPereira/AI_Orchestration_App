@@ -187,6 +187,40 @@ PATH`: after a run the CLI writes a plain JSON run log (workflow name, overall
 It is a file, not a database; the builder (`_build_run_log`) is a pure function
 so it is unit-tested directly.
 
+## Desktop UI (Flet)
+
+`conductor/ui/` is an **optional, additive** desktop front-end — a *thin* layer
+over the engine. It imports the engine's public API only (`load_workflow`,
+`Workflow`, `WorkflowError`, `run_workflow`, `StepResult`, `ADAPTERS`) and never
+reimplements validation or execution; it must not modify any engine module.
+
+One screen: open a workflow JSON → see its step plan → click **Run** → see each
+step's status/duration/output and an overall result. Errors (load/validation, or
+a hard run failure) are shown in place using the engine's own messages.
+
+The split mirrors the engine's testability discipline:
+
+- **`conductor/ui/presenter.py`** — *pure* display logic: plain engine objects in
+  (`Workflow`/`Step`/`StepResult`/`WorkflowError`), strings and small frozen view
+  dataclasses (`PlanRow`, `ResultRow`) out. No Flet import. This is what
+  `tests/test_ui_presenter.py` covers.
+- **`conductor/ui/app.py`** — the Flet shell (`main(page)`). Imports `flet`
+  directly (like the GUI-chat diagnostics import `pywinauto`). Kept thin: it only
+  maps presenter output onto controls, so it is **not** unit-tested. `run_workflow`
+  is blocking, so it runs off the UI event loop via
+  `loop.run_in_executor(None, run_workflow, ...)`; awaiting marshals the result/
+  error back before updating controls.
+- **`conductor/ui/__main__.py`** — `python -m conductor.ui` (`ft.run(main)`).
+
+Flet's API shifts between releases, so it is pinned in `requirements-ui.txt`
+(`flet>=0.85,<0.86`) and `app.py` is written against that line (`ft.run`,
+`page.services` FilePicker, async handlers). The engine and the test suite stay
+stdlib-only — Flet is needed only to open the window.
+
+v1 scope cuts (TODO hooks left in `app.py`): no live per-step progress (results
+render when the whole run finishes; a follow-up can stream the runner's INFO
+logs), no in-app editing (load-and-run only), no run-log export button yet.
+
 ## Coding conventions
 
 - `from __future__ import annotations` at the top of every module.
@@ -205,6 +239,10 @@ python -m conductor example_named_outputs_workflow.json       # {steps.<id>} fan
 python -m conductor --dry-run example_timeout_workflow.json   # validate + plan only
 python -m conductor --verbose example_workflow.json           # show resolved prompts
 python -m conductor --output results.json example_workflow.json  # write a JSON run log
+
+# Desktop UI (optional; needs Flet — the engine itself stays stdlib-only)
+pip install -r requirements-ui.txt
+python -m conductor.ui
 
 # Tests (pytest is the only dev dependency)
 pip install -r requirements-dev.txt
