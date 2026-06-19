@@ -47,7 +47,8 @@ def _print_plan(workflow: Workflow) -> None:
     print(f"Plan for workflow: {workflow.name}")
     for index, step in enumerate(workflow.steps, start=1):
         suffix = f" (timeout={step.timeout}s)" if step.timeout is not None else ""
-        print(f"  {index}. {step.adapter}{suffix}")
+        id_label = f" [id={step.id}]" if step.id is not None else ""
+        print(f"  {index}. {step.adapter}{id_label}{suffix}")
         print(f"     prompt: {step.prompt}")
 
 

@@ -130,6 +130,13 @@ def test_example_echo_workflow_runs():
     assert cli.main([str(ROOT / "example_workflow.json")]) == 0
 
 
+def test_example_named_outputs_workflow_runs(capsys):
+    assert cli.main([str(ROOT / "example_named_outputs_workflow.json")]) == 0
+    out = capsys.readouterr().out
+    # The final step interpolates both named outputs by id.
+    assert "Explain distributed systems to first-year students" in out
+
+
 def test_example_invalid_workflow_fails(capsys):
     assert cli.main([str(ROOT / "example_invalid_workflow.json")]) == 1
     assert "unknown adapter 'NoSuchAdapter'" in capsys.readouterr().err

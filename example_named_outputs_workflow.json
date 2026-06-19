@@ -1,0 +1,20 @@
+{
+  "_comment": "Demonstrates named step outputs. Give a step an 'id', then reference its output from any later step with {steps.<id>}. {input} still means the immediately-previous step's output. Here the final step combines BOTH earlier outputs by id, which a purely linear {input} chain could not do.",
+  "name": "named-outputs-demo",
+  "steps": [
+    {
+      "id": "topic",
+      "adapter": "EchoAdapter",
+      "prompt": "distributed systems"
+    },
+    {
+      "id": "audience",
+      "adapter": "EchoAdapter",
+      "prompt": "first-year students"
+    },
+    {
+      "adapter": "EchoAdapter",
+      "prompt": "Explain {steps.topic} to {steps.audience}. (Most recent input was: {input})"
+    }
+  ]
+}

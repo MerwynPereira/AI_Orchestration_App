@@ -165,3 +165,130 @@ def test_validate_reports_every_problem_at_once():
     assert "step 2: 'prompt' must be a string" in problems
     assert "step 3: 'timeout' must be a positive number" in problems
     assert len(problems) == 4
+
+
+# --- step id + {steps.<id>} references -------------------------------------
+
+
+def test_load_parses_step_id(tmp_path):
+    path = _write(
+        tmp_path,
+        {
+            "name": "d",
+            "steps": [
+                {"id": "first", "adapter": "EchoAdapter", "prompt": "hi"},
+                {"adapter": "EchoAdapter", "prompt": "{steps.first}"},
+            ],
+        },
+    )
+    steps = load_workflow(path, known_adapters=KNOWN).steps
+    assert steps[0].id == "first"
+    assert steps[1].id is None
+
+
+@pytest.mark.parametrize("bad", [123, True, [1], {"x": 1}])
+def test_validate_id_wrong_type(bad):
+    problems = validate_workflow(
+        {"name": "d", "steps": [{"id": bad, "adapter": "EchoAdapter", "prompt": "x"}]}
+    )
+    assert "step 1: 'id' must be a non-empty string" in problems
+
+
+def test_validate_id_empty_string():
+    problems = validate_workflow(
+        {"name": "d", "steps": [{"id": "", "adapter": "EchoAdapter", "prompt": "x"}]}
+    )
+    assert "step 1: 'id' must be a non-empty string" in problems
+
+
+@pytest.mark.parametrize("bad", ["has space", "dot.name", "bang!", "a/b"])
+def test_validate_id_bad_characters(bad):
+    problems = validate_workflow(
+        {"name": "d", "steps": [{"id": bad, "adapter": "EchoAdapter", "prompt": "x"}]}
+    )
+    assert "step 1: 'id' may contain only letters, digits, '_' and '-'" in problems
+
+
+@pytest.mark.parametrize("good", ["first", "step_1", "step-2", "ABC123"])
+def test_validate_id_good_accepted(good):
+    problems = validate_workflow(
+        {"name": "d", "steps": [{"id": good, "adapter": "EchoAdapter", "prompt": "x"}]},
+        known_adapters=KNOWN,
+    )
+    assert problems == []
+
+
+def test_validate_duplicate_ids():
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [
+                {"id": "dup", "adapter": "EchoAdapter", "prompt": "a"},
+                {"id": "dup", "adapter": "EchoAdapter", "prompt": "b"},
+            ],
+        },
+        known_adapters=KNOWN,
+    )
+    assert "step 2: duplicate step id 'dup'" in problems
+
+
+def test_validate_reference_to_known_earlier_id_ok():
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [
+                {"id": "a", "adapter": "EchoAdapter", "prompt": "x"},
+                {"adapter": "EchoAdapter", "prompt": "uses {steps.a}"},
+            ],
+        },
+        known_adapters=KNOWN,
+    )
+    assert problems == []
+
+
+def test_validate_reference_to_unknown_id():
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [{"adapter": "EchoAdapter", "prompt": "uses {steps.ghost}"}],
+        },
+        known_adapters=KNOWN,
+    )
+    assert "step 1: prompt references unknown step id 'ghost'" in problems
+
+
+def test_validate_forward_reference():
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [
+                {"adapter": "EchoAdapter", "prompt": "uses {steps.later}"},
+                {"id": "later", "adapter": "EchoAdapter", "prompt": "x"},
+            ],
+        },
+        known_adapters=KNOWN,
+    )
+    assert "step 1: prompt references step id 'later' before it runs" in problems
+
+
+def test_validate_self_reference_is_forward():
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [{"id": "me", "adapter": "EchoAdapter", "prompt": "{steps.me}"}],
+        },
+        known_adapters=KNOWN,
+    )
+    assert "step 1: prompt references step id 'me' before it runs" in problems
+
+
+def test_validate_non_reference_braces_are_ignored():
+    # Literal braces that are not {input} or {steps.<id>} must pass through.
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [{"adapter": "EchoAdapter", "prompt": 'json: {"k": 1} and {x}'}],
+        },
+        known_adapters=KNOWN,
+    )
+    assert problems == []

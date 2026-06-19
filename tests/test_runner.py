@@ -36,6 +36,27 @@ def test_resolve_prompt_without_placeholder():
     assert _resolve_prompt(step, "PREV") == "plain"
 
 
+def test_resolve_prompt_substitutes_named_outputs():
+    step = Step(adapter="EchoAdapter", prompt="{steps.a} + {steps.b}")
+    assert _resolve_prompt(step, "PREV", {"a": "X", "b": "Y"}) == "X + Y"
+
+
+def test_resolve_prompt_mixes_input_and_named_outputs():
+    step = Step(adapter="EchoAdapter", prompt="{input} then {steps.a}")
+    assert _resolve_prompt(step, "PREV", {"a": "X"}) == "PREV then X"
+
+
+def test_resolve_prompt_unknown_named_output_is_empty():
+    step = Step(adapter="EchoAdapter", prompt="[{steps.missing}]")
+    assert _resolve_prompt(step, "PREV", {}) == "[]"
+
+
+def test_resolve_prompt_does_not_rescan_substituted_text():
+    # An injected value that contains a placeholder must NOT be re-expanded.
+    step = Step(adapter="EchoAdapter", prompt="{input}")
+    assert _resolve_prompt(step, "{steps.a}", {"a": "SECRET"}) == "{steps.a}"
+
+
 # --- chaining --------------------------------------------------------------
 
 
@@ -50,6 +71,20 @@ def test_two_step_chain_pipes_output_into_next_input():
     results = run_workflow(workflow, registry=_echo_registry())
     assert [r.output for r in results] == ["first", "got: first"]
     assert [r.index for r in results] == [1, 2]
+
+
+def test_named_outputs_let_a_step_combine_two_earlier_outputs():
+    workflow = Workflow(
+        name="fan-in",
+        steps=[
+            Step(adapter="EchoAdapter", prompt="alpha", id="a"),
+            Step(adapter="EchoAdapter", prompt="beta", id="b"),
+            Step(adapter="EchoAdapter", prompt="{steps.a}|{steps.b}|{input}"),
+        ],
+    )
+    results = run_workflow(workflow, registry=_echo_registry())
+    # The last step sees both named outputs and {input} (= the prior step "beta").
+    assert results[-1].output == "alpha|beta|beta"
 
 
 # --- stop-on-error ---------------------------------------------------------

@@ -8,8 +8,10 @@ Guidance for working in this repository. It documents the conventions the
 Conductor is a small engine for chaining AI/CLI tools. A **workflow** is an
 ordered list of **steps**; each step names an **adapter** (a uniform wrapper
 around a tool) and a **prompt**. The **runner** executes steps in order, piping
-each step's output into the next step's prompt via an `{input}` placeholder. The
-engine is headless and command-line driven — there is no UI here.
+each step's output into the next step's prompt: `{input}` is the
+immediately-previous output, and `{steps.<id>}` is the output of any earlier
+step that declared that `id` (see "Prompt placeholders" below). The engine is
+headless and command-line driven — there is no UI here.
 
 The **core engine** (adapters base, registry, workflow, runner, CLI) is
 stdlib-only. The engine is no longer *strictly* stdlib-only overall: the
@@ -111,8 +113,8 @@ The workflow JSON refers to the adapter by that registered name.
 {
   "name": "my-workflow",
   "steps": [
-    { "adapter": "EchoAdapter", "prompt": "Hello" },
-    { "adapter": "ClaudeCodeAdapter", "prompt": "Improve: {input}", "timeout": 60 }
+    { "id": "draft", "adapter": "EchoAdapter", "prompt": "Hello" },
+    { "adapter": "ClaudeCodeAdapter", "prompt": "Improve: {steps.draft}", "timeout": 60 }
   ]
 }
 ```
@@ -120,10 +122,30 @@ The workflow JSON refers to the adapter by that registered name.
 - `name` — non-empty string.
 - `steps` — non-empty list. Each step:
   - `adapter` — a registered adapter name.
-  - `prompt` — string; `{input}` is replaced with the previous step's output.
+  - `prompt` — string; see "Prompt placeholders" below.
   - `timeout` — optional positive number (seconds) overriding the adapter
     default; only meaningful for CLI adapters.
+  - `id` — optional unique identifier for this step's output, letting later
+    steps reference it as `{steps.<id>}`. Allowed characters: letters, digits,
+    `_`, `-`.
 - Unknown keys (e.g. `_comment`) are ignored, so JSON files can carry notes.
+
+### Prompt placeholders
+
+The runner substitutes two placeholder kinds into a prompt, in a single pass
+(so substituted text is never re-scanned):
+
+- `{input}` — the immediately-previous step's output (empty for the first
+  step). Behaviour is unchanged from the original linear engine.
+- `{steps.<id>}` — the output of an earlier step that declared `"id": "<id>"`.
+  This is what enables fan-in: a step can combine several earlier outputs, not
+  just the previous one.
+
+Any other braces (e.g. literal JSON `{"k": 1}`) are left untouched. Validation
+(in the all-problems-at-once style) reports duplicate ids, references to unknown
+ids, and forward/self references (an id used before the step that produces it).
+At runtime an unresolved id falls back to an empty string, but load-time
+validation is the real guard.
 
 ## Error-handling style
 
