@@ -19,6 +19,8 @@ pnpm-debug.log*
 __pycache__/
 *.py[cod]
 *$py.class
+venv/
+.venv/
 
 # Environment files
 .env

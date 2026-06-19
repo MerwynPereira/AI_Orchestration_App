@@ -1,0 +1,13 @@
+{
+  "name": "echo-chain-demo",
+  "steps": [
+    {
+      "adapter": "EchoAdapter",
+      "prompt": "Hello from step 1"
+    },
+    {
+      "adapter": "EchoAdapter",
+      "prompt": "Step 2 received: {input}"
+    }
+  ]
+}

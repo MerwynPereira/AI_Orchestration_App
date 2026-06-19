@@ -1,0 +1,2 @@
+# Conductor v1 engine skeleton is stdlib-only — no third-party packages yet.
+# UI (flet/pywebview) and GUI-automation (pywinauto/pyperclip) deps come later.
