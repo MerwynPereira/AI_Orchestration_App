@@ -338,3 +338,55 @@ def test_load_defaults_retries_to_zero(tmp_path):
         {"name": "d", "steps": [{"adapter": "EchoAdapter", "prompt": "x"}]},
     )
     assert load_workflow(path, known_adapters=KNOWN).steps[0].retries == 0
+
+
+# --- continue_on_error -----------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [1, 0, "true", "false", [1]])
+def test_validate_bad_continue_on_error(bad):
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [
+                {"adapter": "EchoAdapter", "prompt": "x", "continue_on_error": bad}
+            ],
+        }
+    )
+    assert "step 1: 'continue_on_error' must be a boolean" in problems
+
+
+@pytest.mark.parametrize("good", [True, False])
+def test_validate_good_continue_on_error_accepted(good):
+    problems = validate_workflow(
+        {
+            "name": "d",
+            "steps": [
+                {"adapter": "EchoAdapter", "prompt": "x", "continue_on_error": good}
+            ],
+        },
+        known_adapters=KNOWN,
+    )
+    assert problems == []
+
+
+def test_load_parses_continue_on_error(tmp_path):
+    path = _write(
+        tmp_path,
+        {
+            "name": "d",
+            "steps": [
+                {"adapter": "EchoAdapter", "prompt": "x", "continue_on_error": True}
+            ],
+        },
+    )
+    step = load_workflow(path, known_adapters=KNOWN).steps[0]
+    assert step.continue_on_error is True
+
+
+def test_load_defaults_continue_on_error_to_false(tmp_path):
+    path = _write(
+        tmp_path,
+        {"name": "d", "steps": [{"adapter": "EchoAdapter", "prompt": "x"}]},
+    )
+    assert load_workflow(path, known_adapters=KNOWN).steps[0].continue_on_error is False

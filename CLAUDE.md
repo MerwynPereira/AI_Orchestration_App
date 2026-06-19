@@ -133,6 +133,11 @@ The workflow JSON refers to the adapter by that registered name.
     backoff (`RETRY_BACKOFF_SECONDS`); if it still fails, the usual
     `step N (Adapter) failed` behaviour applies. The backoff `sleep` is
     injected into `run_workflow`, so tests never actually wait.
+  - `continue_on_error` — optional boolean (default `false`). When `true`, a
+    step that still fails after its retries is recorded (`StepResult.status ==
+    "error"`, with `error` set) and the run continues; the failed step's output
+    counts as empty for downstream `{input}`/`{steps.<id>}`. Default `false`
+    keeps the stop-on-first-failure behaviour.
 - Unknown keys (e.g. `_comment`) are ignored, so JSON files can carry notes.
 
 ### Prompt placeholders
@@ -158,7 +163,10 @@ validation is the real guard.
 - `WorkflowError` — a workflow is missing/malformed/invalid, or a step failed.
   The runner wraps an adapter's `AdapterError` in a `WorkflowError` that names
   the failing step (`step N (AdapterName) failed: ...`) and stops; later steps
-  do not run.
+  do not run — unless that step set `continue_on_error`, in which case the
+  failure is recorded on its `StepResult` (`status == "error"`) and the run
+  continues. Retries (`retries`) are applied before a step is considered
+  failed.
 - Validation reports **all** problems at once. `validate_workflow(data,
   known_adapters)` returns a list of human-readable problems;
   `load_workflow()` raises a single `WorkflowError` listing every problem.

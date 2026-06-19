@@ -146,3 +146,10 @@ def test_example_timeout_workflow_parses(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(cli, "run_workflow", mock.MagicMock())
     assert cli.main(["--dry-run", str(ROOT / "example_timeout_workflow.json")]) == 0
     assert "timeout=60.0s" in capsys.readouterr().out
+
+
+def test_example_resilient_workflow_parses(capsys, monkeypatch):
+    # Uses ClaudeCodeAdapter; just validate + plan it without running.
+    monkeypatch.setattr(cli, "run_workflow", mock.MagicMock())
+    assert cli.main(["--dry-run", str(ROOT / "example_resilient_workflow.json")]) == 0
+    assert "[id=facts]" in capsys.readouterr().out

@@ -35,6 +35,10 @@ RETRY_BACKOFF_SECONDS = 1.0
 #: happens to contain ``{input}`` or ``{steps.x}`` is inserted literally.
 _PLACEHOLDER_RE = re.compile(r"\{input\}|\{steps\.([A-Za-z0-9_-]+)\}")
 
+#: Step outcome statuses recorded on :class:`StepResult`.
+STATUS_OK = "ok"
+STATUS_ERROR = "error"
+
 
 @dataclass(frozen=True)
 class StepResult:
@@ -43,12 +47,19 @@ class StepResult:
     Attributes:
         index: 1-based step position.
         adapter: Name of the adapter that ran.
-        output: The adapter's response.
+        output: The adapter's response (empty string for a failed step that was
+            allowed to continue).
+        status: :data:`STATUS_OK` for success, :data:`STATUS_ERROR` for a step
+            that failed but had ``continue_on_error`` set.
+        error: The failure message when ``status`` is :data:`STATUS_ERROR`,
+            otherwise ``None``.
     """
 
     index: int
     adapter: str
     output: str
+    status: str = STATUS_OK
+    error: str | None = None
 
 
 def _resolve_prompt(
@@ -200,9 +211,21 @@ def run_workflow(
 
     logger.info("Running workflow: %s", workflow.name)
     for index, step in enumerate(workflow.steps, start=1):
-        result = _run_step(
-            step, index, previous_output, outputs, active_registry, sleep
-        )
+        try:
+            result = _run_step(
+                step, index, previous_output, outputs, active_registry, sleep
+            )
+        except WorkflowError as exc:
+            if not step.continue_on_error:
+                raise
+            logger.warning("  continuing past failed step %d: %s", index, exc)
+            result = StepResult(
+                index=index,
+                adapter=step.adapter,
+                output="",
+                status=STATUS_ERROR,
+                error=str(exc),
+            )
         previous_output = result.output
         if step.id is not None:
             outputs[step.id] = result.output

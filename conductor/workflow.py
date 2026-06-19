@@ -47,6 +47,9 @@ class Step:
         retries: How many times to retry the step (with a small fixed backoff)
             if the adapter raises ``AdapterError``. Non-negative; ``0`` means a
             single attempt with no retry.
+        continue_on_error: If ``True``, a failure of this step (after retries) is
+            recorded and the run continues, with this step's output treated as
+            empty downstream. Defaults to ``False`` (stop on first failure).
     """
 
     adapter: str
@@ -54,6 +57,7 @@ class Step:
     timeout: float | None = None
     id: str | None = None
     retries: int = 0
+    continue_on_error: bool = False
 
 
 @dataclass(frozen=True)
@@ -146,6 +150,10 @@ def _validate_step(
     retries = item.get("retries")
     if retries is not None and not _is_non_negative_int(retries):
         problems.append(f"{prefix}: 'retries' must be a non-negative integer")
+
+    continue_on_error = item.get("continue_on_error")
+    if continue_on_error is not None and not isinstance(continue_on_error, bool):
+        problems.append(f"{prefix}: 'continue_on_error' must be a boolean")
 
     step_id = item.get("id")
     if step_id is not None:
@@ -274,4 +282,5 @@ def _build_step(item: dict) -> Step:
         timeout=float(timeout) if timeout is not None else None,
         id=item.get("id"),
         retries=int(item.get("retries", 0)),
+        continue_on_error=bool(item.get("continue_on_error", False)),
     )

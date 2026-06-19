@@ -10,6 +10,8 @@ import pytest
 from conductor.adapters import Adapter, AdapterError, ClaudeCodeAdapter, EchoAdapter
 from conductor.runner import (
     RETRY_BACKOFF_SECONDS,
+    STATUS_ERROR,
+    STATUS_OK,
     _resolve_prompt,
     _send_with_retries,
     run_workflow,
@@ -195,6 +197,87 @@ def test_run_workflow_retries_a_flaky_step():
 
     assert results[0].output == "ok after 2"
     assert slept == [RETRY_BACKOFF_SECONDS]
+
+
+# --- continue_on_error -----------------------------------------------------
+
+
+def test_successful_step_has_ok_status():
+    workflow = Workflow(name="w", steps=[Step(adapter="EchoAdapter", prompt="hi")])
+    [result] = run_workflow(workflow, registry=_echo_registry())
+    assert result.status == STATUS_OK
+    assert result.error is None
+
+
+def test_continue_on_error_records_failure_and_keeps_going():
+    workflow = Workflow(
+        name="resilient",
+        steps=[
+            Step(adapter="EchoAdapter", prompt="ok1"),
+            Step(adapter="BoomAdapter", prompt="boom", continue_on_error=True),
+            Step(adapter="EchoAdapter", prompt="ok3"),
+        ],
+    )
+    results = run_workflow(workflow, registry=_echo_registry())
+
+    assert [r.status for r in results] == [STATUS_OK, STATUS_ERROR, STATUS_OK]
+    failed = results[1]
+    assert failed.output == ""
+    assert "step 2 (BoomAdapter) failed" in failed.error
+    assert "kaboom" in failed.error
+    # The run reached the third step.
+    assert results[2].output == "ok3"
+
+
+def test_continue_on_error_makes_failed_output_empty_downstream():
+    workflow = Workflow(
+        name="downstream",
+        steps=[
+            Step(adapter="BoomAdapter", prompt="boom", continue_on_error=True),
+            Step(adapter="EchoAdapter", prompt="prev=[{input}]"),
+        ],
+    )
+    results = run_workflow(workflow, registry=_echo_registry())
+    # The failed step's output counts as empty for the next step's {input}.
+    assert results[1].output == "prev=[]"
+
+
+def test_continue_on_error_failed_named_output_is_empty():
+    workflow = Workflow(
+        name="named-fail",
+        steps=[
+            Step(adapter="BoomAdapter", prompt="boom", id="bad", continue_on_error=True),
+            Step(adapter="EchoAdapter", prompt="ref=[{steps.bad}]"),
+        ],
+    )
+    results = run_workflow(workflow, registry=_echo_registry())
+    assert results[1].output == "ref=[]"
+
+
+def test_continue_on_error_false_still_stops():
+    workflow = Workflow(
+        name="strict",
+        steps=[
+            Step(adapter="BoomAdapter", prompt="boom"),  # continue_on_error default
+            Step(adapter="EchoAdapter", prompt="never"),
+        ],
+    )
+    with pytest.raises(WorkflowError, match="step 1 .BoomAdapter. failed"):
+        run_workflow(workflow, registry=_echo_registry())
+
+
+def test_continue_on_error_also_covers_unknown_adapter():
+    workflow = Workflow(
+        name="ghost-ok",
+        steps=[
+            Step(adapter="Ghost", prompt="x", continue_on_error=True),
+            Step(adapter="EchoAdapter", prompt="after"),
+        ],
+    )
+    results = run_workflow(workflow, registry=_echo_registry())
+    assert results[0].status == STATUS_ERROR
+    assert "unknown adapter 'Ghost'" in results[0].error
+    assert results[1].output == "after"
 
 
 # --- per-step timeout ------------------------------------------------------

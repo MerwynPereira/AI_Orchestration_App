@@ -1,0 +1,25 @@
+{
+  "_comment": "Demonstrates resilience fields: 'retries' (retry the step with backoff on AdapterError) and 'continue_on_error' (record the failure and carry on, treating this step's output as empty downstream). Also shows a named output. Uses ClaudeCodeAdapter, so it needs Claude Code installed to actually run; validate it without running via: python -m conductor --dry-run example_resilient_workflow.json",
+  "name": "resilient-demo",
+  "steps": [
+    {
+      "_comment": "Flaky network/tool call: try up to 2 extra times before giving up.",
+      "id": "facts",
+      "adapter": "ClaudeCodeAdapter",
+      "prompt": "List three facts about the moon.",
+      "retries": 2
+    },
+    {
+      "_comment": "Optional enrichment: if it fails, keep going with an empty result instead of aborting the whole run.",
+      "id": "rhyme",
+      "adapter": "ClaudeCodeAdapter",
+      "prompt": "Write a one-line rhyme about: {steps.facts}",
+      "continue_on_error": true
+    },
+    {
+      "_comment": "Final step combines an earlier named output with the previous step's output ({input}); {steps.rhyme} is empty if step 2 was skipped.",
+      "adapter": "ClaudeCodeAdapter",
+      "prompt": "Combine these into a short blurb. Facts: {steps.facts} Rhyme: {input}"
+    }
+  ]
+}
